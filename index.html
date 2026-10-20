@@ -15,3 +15,26 @@
 <section id="page-admin" class="page"><div class="tool glass"><span class="tag">RESTRICTED</span><h2>Admin dashboard</h2><div class="adminTabs"><button data-admin="users">Users</button><button data-admin="bookings">Bookings</button><button data-admin="features">Features</button><button data-admin="site">Website settings</button><button data-admin="notify">Notifications</button><button data-admin="events">Activity</button></div><div id="adminArea" class="result">Loading admin tools…</div></div></section>
 <section id="page-auth" class="page"><div class="tool glass auth"><h2 id="authTitle">Sign in</h2><div class="adminTabs"><button id="loginTab">Sign in</button><button id="registerTab">Register</button></div><form id="authForm"><label id="authNameWrap" class="hidden">Name<input id="authName"></label><label>Email<input id="authEmail" type="email" required></label><label>Password<input id="authPassword" type="password" minlength="8" required></label><button class="primary" id="authSubmit">Sign in</button></form><div id="authResult" class="result"></div></div></section>
 <footer>GlassHub · Your digital workspace <span>Use official government portals and never share OTPs.</span></footer></main><script src="/static/app.js"></script></body></html>
+<script type="module">
+  // Import the functions you need from the SDKs you need
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js";
+  import { getAnalytics } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-analytics.js";
+  // TODO: Add SDKs for Firebase products that you want to use
+  // https://firebase.google.com/docs/web/setup#available-libraries
+
+  // Your web app's Firebase configuration
+  // For Firebase JS SDK v7.20.0 and later, measurementId is optional
+  const firebaseConfig = {
+    apiKey: "AIzaSyCp0IaZMIl4P1BBeavVB21DeCFw3DB0L_4",
+    authDomain: "hiiiiii-d6933.firebaseapp.com",
+    projectId: "hiiiiii-d6933",
+    storageBucket: "hiiiiii-d6933.firebasestorage.app",
+    messagingSenderId: "612171099941",
+    appId: "1:612171099941:web:93cd580e3ba013f7b1f4cc",
+    measurementId: "G-0CKBBFG7D4"
+  };
+
+  // Initialize Firebase
+  const app = initializeApp(firebaseConfig);
+  const analytics = getAnalytics(app);
+</script>
