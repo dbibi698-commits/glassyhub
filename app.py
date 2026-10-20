@@ -1,221 +1,149 @@
-import os, sqlite3, secrets, hashlib, hmac
+import os, sqlite3, secrets, hashlib, hmac, base64
 from datetime import datetime
 from functools import wraps
 from flask import Flask, request, jsonify, session, send_from_directory, g
+ROOT=os.path.dirname(os.path.abspath(__file__)); DB=os.path.join(ROOT,'glasshub.db')
+ADMIN_EMAIL=os.getenv('ADMIN_EMAIL','dbibi698@gmail.com').lower().strip()
+app=Flask(__name__,static_folder='static',static_url_path='/static'); app.secret_key=os.getenv('FLASK_SECRET_KEY','change-this-secret-before-deployment')
+app.config['MAX_CONTENT_LENGTH']=5*1024*1024
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(APP_DIR, "glasshub.db")
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "dbibi698@gmail.com").strip().lower()
-SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET")
-app = Flask(__name__, static_folder="static", static_url_path="/static")
-app.secret_key = SECRET_KEY
-app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
-
-def db():
-    if "db" not in g:
-        g.db = sqlite3.connect(DB_PATH)
-        g.db.row_factory = sqlite3.Row
-    return g.db
-
+def now(): return datetime.utcnow().isoformat(timespec='seconds')+'Z'
+def conn():
+ if 'db' not in g: g.db=sqlite3.connect(DB); g.db.row_factory=sqlite3.Row
+ return g.db
 @app.teardown_appcontext
-def close_db(_=None):
-    conn = g.pop("db", None)
-    if conn is not None: conn.close()
-
-def init_db():
-    con = sqlite3.connect(DB_PATH)
-    con.executescript("""
-    CREATE TABLE IF NOT EXISTS users(
-      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL, salt TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user',
-      blocked INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, last_seen TEXT
-    );
-    CREATE TABLE IF NOT EXISTS bookings(
-      id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, name TEXT NOT NULL, email TEXT NOT NULL,
-      service TEXT NOT NULL, details TEXT, status TEXT NOT NULL DEFAULT 'Pending', created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS events(
-      id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, event TEXT NOT NULL, details TEXT,
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS notifications(
-      id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, title TEXT NOT NULL,
-      message TEXT NOT NULL, created_at TEXT NOT NULL, read_at TEXT
-    );
-    """)
-    # Admin account is created only after the owner registers with the configured admin email.
-    con.commit(); con.close()
-
-def now(): return datetime.utcnow().isoformat(timespec="seconds") + "Z"
-def password_hash(password, salt):
-    return hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 240000).hex()
-def current_user():
-    uid = session.get("uid")
-    if not uid: return None
-    row = db().execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
-    if not row or row["blocked"]:
-        session.clear(); return None
-    db().execute("UPDATE users SET last_seen=? WHERE id=?", (now(), uid)); db().commit()
-    return row
-def log_event(event, details=""):
-    user = current_user()
-    db().execute("INSERT INTO events(user_id,event,details,created_at) VALUES(?,?,?,?)",
-                 (user["id"] if user else None, event[:100], details[:500], now()))
-    db().commit()
-def login_required(fn):
-    @wraps(fn)
-    def wrapped(*a, **kw):
-        u = current_user()
-        if not u: return jsonify(error="Please sign in first."), 401
-        return fn(*a, **kw)
-    return wrapped
-def admin_required(fn):
-    @wraps(fn)
-    def wrapped(*a, **kw):
-        u = current_user()
-        if not u: return jsonify(error="Please sign in first."), 401
-        if u["role"] != "admin" or u["email"].lower() != ADMIN_EMAIL:
-            return jsonify(error="Admin access only."), 403
-        return fn(*a, **kw)
-    return wrapped
-
-@app.get("/")
-def home(): return send_from_directory(APP_DIR, "index.html")
-
-@app.post("/api/register")
-def register():
-    data = request.get_json(silent=True) or {}
-    name, email, password = (str(data.get(k, "")).strip() for k in ("name","email","password"))
-    email = email.lower()
-    if not name or len(name) > 80 or "@" not in email or len(password) < 8:
-        return jsonify(error="Enter a name, valid email, and password of at least 8 characters."), 400
-    salt = secrets.token_hex(16)
-    role = "admin" if email == ADMIN_EMAIL else "user"
-    try:
-        cur = db().execute("INSERT INTO users(name,email,password_hash,salt,role,created_at) VALUES(?,?,?,?,?,?)",
-             (name,email,password_hash(password,salt),salt,role,now()))
-        db().commit(); session["uid"] = cur.lastrowid
-        log_event("register", "Account created")
-        return jsonify(ok=True, user={"name":name,"email":email,"role":role})
-    except sqlite3.IntegrityError:
-        return jsonify(error="That email is already registered."), 409
-
-@app.post("/api/login")
-def login():
-    data = request.get_json(silent=True) or {}
-    email, password = str(data.get("email","")).strip().lower(), str(data.get("password",""))
-    row = db().execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
-    if not row or not hmac.compare_digest(password_hash(password,row["salt"]), row["password_hash"]):
-        return jsonify(error="Email or password is incorrect."), 401
-    if row["blocked"]: return jsonify(error="This account has been blocked by the administrator."), 403
-    session.clear(); session["uid"] = row["id"]
-    log_event("login", "Signed in")
-    return jsonify(ok=True, user={"name":row["name"],"email":row["email"],"role":row["role"]})
-
-@app.post("/api/logout")
-def logout():
-    log_event("logout", "Signed out"); session.clear()
-    return jsonify(ok=True)
-
-@app.get("/api/me")
+def close(_=None):
+ c=g.pop('db',None)
+ if c: c.close()
+def init():
+ c=sqlite3.connect(DB); c.executescript('''CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,name TEXT,email TEXT UNIQUE,password TEXT,salt TEXT,role TEXT DEFAULT 'user',blocked INTEGER DEFAULT 0,photo TEXT DEFAULT '',created TEXT,last_seen TEXT);
+ CREATE TABLE IF NOT EXISTS bookings(id INTEGER PRIMARY KEY,name TEXT,email TEXT,user_id INTEGER,service TEXT,details TEXT,status TEXT DEFAULT 'Pending',review TEXT DEFAULT '',created TEXT);
+ CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,user_id INTEGER,event TEXT,details TEXT,created TEXT);
+ CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY,user_id INTEGER,title TEXT,message TEXT,created TEXT,read_at TEXT);
+ CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);
+ CREATE TABLE IF NOT EXISTS features(id INTEGER PRIMARY KEY,name TEXT,description TEXT,icon TEXT,page TEXT,enabled INTEGER DEFAULT 1);''')
+ if not c.execute('SELECT 1 FROM settings WHERE key="site_name"').fetchone(): c.execute('INSERT INTO settings VALUES("site_name","GlassHub")')
+ defaults=[('PDF Resizer','Compress PDF to a smaller copy','▤','pdf'),('Image Resizer','Resize and download images','▧','image'),('Images to PDF','Convert multiple images to PDF','▧','convert'),('Background Remover','API connection required','✂','background'),('Cyber Cafe Booking','Book printing and document assistance','▣','cyber'),('Wallpapers','Download phone and PC wallpapers','▦','wallpapers'),('Social & Search','Social sites and search engines','◎','social'),('AI Directory','Open AI websites','✦','ai')]
+ for x in defaults: c.execute('INSERT OR IGNORE INTO features(name,description,icon,page,enabled) VALUES(?,?,?,?,1)',x)
+ c.commit(); c.close()
+def pw(p,s): return hashlib.pbkdf2_hmac('sha256',p.encode(),s.encode(),200000).hex()
 def me():
-    u = current_user()
-    return jsonify(user={"name":u["name"],"email":u["email"],"role":u["role"]} if u else None)
-
-@app.post("/api/bookings")
-def create_booking():
-    data = request.get_json(silent=True) or {}
-    u = current_user()
-    name = (u["name"] if u else str(data.get("name","")).strip())[:80]
-    email = (u["email"] if u else str(data.get("email","")).strip().lower())[:160]
-    service = str(data.get("service","")).strip()[:120]
-    details = str(data.get("details","")).strip()[:1000]
-    if not name or "@" not in email or not service:
-        return jsonify(error="Enter your name, email and select a service."), 400
-    db().execute("INSERT INTO bookings(user_id,name,email,service,details,created_at) VALUES(?,?,?,?,?,?)",
-                 (u["id"] if u else None,name,email,service,details,now()))
-    db().commit(); log_event("booking", service)
-    return jsonify(ok=True, message="Booking request submitted. Admin can review it.")
-
-@app.get("/api/notifications")
-@login_required
+ uid=session.get('uid')
+ if not uid:return None
+ u=conn().execute('SELECT * FROM users WHERE id=?',(uid,)).fetchone()
+ if not u or u['blocked']: session.clear(); return None
+ conn().execute('UPDATE users SET last_seen=? WHERE id=?',(now(),uid)); conn().commit(); return u
+def log(ev,detail=''):
+ u=me(); conn().execute('INSERT INTO events(user_id,event,details,created) VALUES(?,?,?,?)',(u['id'] if u else None,ev[:80],detail[:300],now())); conn().commit()
+def auth(f):
+ @wraps(f)
+ def w(*a,**k):
+  if not me(): return jsonify(error='Please sign in.'),401
+  return f(*a,**k)
+ return w
+def admin(f):
+ @wraps(f)
+ def w(*a,**k):
+  u=me()
+  if not u:return jsonify(error='Please sign in.'),401
+  if u['role']!='admin' or u['email'].lower()!=ADMIN_EMAIL:return jsonify(error='Admin access only.'),403
+  return f(*a,**k)
+ return w
+def user_json(u): return {'id':u['id'],'name':u['name'],'email':u['email'],'role':u['role'],'blocked':u['blocked'],'photo':u['photo'] or '','created':u['created'],'last_seen':u['last_seen']}
+@app.get('/')
+def home(): return send_from_directory(ROOT,'index.html')
+@app.post('/api/register')
+def register():
+ d=request.get_json() or {}; name=str(d.get('name','')).strip(); email=str(d.get('email','')).strip().lower(); p=str(d.get('password',''))
+ if not name or '@' not in email or len(p)<8:return jsonify(error='Name, valid email and password (8+ characters) required.'),400
+ salt=secrets.token_hex(16); role='admin' if email==ADMIN_EMAIL else 'user'
+ try:
+  cur=conn().execute('INSERT INTO users(name,email,password,salt,role,created) VALUES(?,?,?,?,?,?)',(name,email,pw(p,salt),salt,role,now()));conn().commit();session['uid']=cur.lastrowid;log('register','Account created');return jsonify(user=user_json(me()))
+ except sqlite3.IntegrityError:return jsonify(error='Email already registered.'),409
+@app.post('/api/login')
+def login():
+ d=request.get_json() or {}; email=str(d.get('email','')).lower().strip(); u=conn().execute('SELECT * FROM users WHERE email=?',(email,)).fetchone()
+ if not u or not hmac.compare_digest(pw(str(d.get('password','')),u['salt']),u['password']):return jsonify(error='Email or password incorrect.'),401
+ if u['blocked']:return jsonify(error='Account blocked by admin.'),403
+ session.clear();session['uid']=u['id'];log('login','Signed in');return jsonify(user=user_json(u))
+@app.post('/api/logout')
+def logout(): log('logout');session.clear();return jsonify(ok=True)
+@app.get('/api/me')
+def getme(): return jsonify(user=user_json(me()) if me() else None)
+@app.post('/api/profile')
+@auth
+def profile():
+ d=request.get_json() or {}; u=me(); name=str(d.get('name',u['name'])).strip()[:80]; photo=str(d.get('photo',u['photo'] or ''))
+ if len(photo)>400000:return jsonify(error='Profile image is too large (max about 300 KB).'),400
+ if photo and not photo.startswith('data:image/'):return jsonify(error='Use an image file.'),400
+ conn().execute('UPDATE users SET name=?,photo=? WHERE id=?',(name,photo,u['id']));conn().commit();return jsonify(user=user_json(me()))
+@app.post('/api/change-password')
+@auth
+def change_password():
+ d=request.get_json() or {};u=me()
+ if not hmac.compare_digest(pw(str(d.get('current','')),u['salt']),u['password']):return jsonify(error='Current password is incorrect.'),400
+ p=str(d.get('new',''))
+ if len(p)<8:return jsonify(error='New password must be at least 8 characters.'),400
+ salt=secrets.token_hex(16);conn().execute('UPDATE users SET password=?,salt=? WHERE id=?',(pw(p,salt),salt,u['id']));conn().commit();return jsonify(ok=True)
+@app.get('/api/features')
+def features():return jsonify(features=[dict(r) for r in conn().execute('SELECT * FROM features ORDER BY id')])
+@app.get('/api/settings')
+def getsettings():return jsonify(settings={r['key']:r['value'] for r in conn().execute('SELECT * FROM settings')})
+@app.post('/api/bookings')
+def booking():
+ d=request.get_json() or {};u=me();name=(u['name'] if u else str(d.get('name','')).strip());email=(u['email'] if u else str(d.get('email','')).strip().lower());service=str(d.get('service','')).strip();details=str(d.get('details','')).strip()
+ if not name or '@' not in email or not service:return jsonify(error='Name, email and service required.'),400
+ conn().execute('INSERT INTO bookings(name,email,user_id,service,details,created) VALUES(?,?,?,?,?,?)',(name,email,u['id'] if u else None,service,details,now()));conn().commit();log('booking',service);return jsonify(ok=True,message='Booking submitted. Admin can review it.')
+@app.get('/api/my-bookings')
+@auth
+def mybookings():
+ u=me();return jsonify(bookings=[dict(r) for r in conn().execute('SELECT * FROM bookings WHERE user_id=? ORDER BY id DESC',(u['id'],))])
+@app.get('/api/notifications')
+@auth
 def notifications():
-    u = current_user()
-    rows = db().execute("SELECT id,title,message,created_at,read_at FROM notifications WHERE user_id IS NULL OR user_id=? ORDER BY id DESC LIMIT 100", (u["id"],)).fetchall()
-    return jsonify(notifications=[dict(r) for r in rows])
-
-@app.post("/api/notifications/<int:notification_id>/read")
-@login_required
-def notification_read(notification_id):
-    u = current_user()
-    db().execute("UPDATE notifications SET read_at=? WHERE id=? AND (user_id IS NULL OR user_id=?)", (now(), notification_id, u["id"]))
-    db().commit()
-    return jsonify(ok=True)
-
-@app.get("/api/my-bookings")
-@login_required
-def my_bookings():
-    u=current_user()
-    rows=db().execute("SELECT id,service,details,status,created_at FROM bookings WHERE user_id=? ORDER BY id DESC",(u["id"],)).fetchall()
-    return jsonify(bookings=[dict(r) for r in rows])
-
-@app.post("/api/events")
-def event():
-    data=request.get_json(silent=True) or {}
-    allowed={"tool_open","shortcut_add","page_open","download"}
-    ev=str(data.get("event",""))
-    if ev in allowed: log_event(ev,str(data.get("details","")))
-    return jsonify(ok=True)
-
-@app.get("/api/admin/summary")
-@admin_required
-def admin_summary():
-    con=db()
-    return jsonify(users=con.execute("SELECT id,name,email,role,blocked,created_at,last_seen FROM users ORDER BY id DESC").fetchall() and
-       [dict(r) for r in con.execute("SELECT id,name,email,role,blocked,created_at,last_seen FROM users ORDER BY id DESC").fetchall()],
-       bookings=[dict(r) for r in con.execute("SELECT id,name,email,service,details,status,created_at FROM bookings ORDER BY id DESC").fetchall()],
-       events=[dict(r) for r in con.execute("SELECT e.id,u.email,e.event,e.details,e.created_at FROM events e LEFT JOIN users u ON u.id=e.user_id ORDER BY e.id DESC LIMIT 200").fetchall()])
-
-@app.post("/api/admin/notifications")
-@admin_required
-def admin_notify():
-    data = request.get_json(silent=True) or {}
-    title = str(data.get("title", "")).strip()[:120]
-    message = str(data.get("message", "")).strip()[:2000]
-    audience = str(data.get("audience", "all"))
-    if not title or not message:
-        return jsonify(error="Enter both a title and message."), 400
-    if audience == "all":
-        db().execute("INSERT INTO notifications(user_id,title,message,created_at) VALUES(NULL,?,?,?)", (title, message, now()))
-    else:
-        try: target_id = int(audience)
-        except (TypeError, ValueError): return jsonify(error="Invalid audience."), 400
-        exists = db().execute("SELECT id FROM users WHERE id=?", (target_id,)).fetchone()
-        if not exists: return jsonify(error="User not found."), 404
-        db().execute("INSERT INTO notifications(user_id,title,message,created_at) VALUES(?,?,?,?)", (target_id, title, message, now()))
-    db().commit()
-    return jsonify(ok=True, message="Notification published.")
-
-@app.post("/api/admin/users/<int:user_id>/block")
-@admin_required
-def block_user(user_id):
-    u=current_user()
-    if u["id"] == user_id: return jsonify(error="You cannot block your own admin account."), 400
-    data=request.get_json(silent=True) or {}
-    db().execute("UPDATE users SET blocked=? WHERE id=? AND role!='admin'",(1 if data.get("blocked") else 0,user_id))
-    db().commit(); return jsonify(ok=True)
-
-@app.post("/api/admin/bookings/<int:booking_id>")
-@admin_required
-def update_booking(booking_id):
-    status=str((request.get_json(silent=True) or {}).get("status","Pending"))
-    if status not in {"Pending","Accepted","Completed","Cancelled"}: return jsonify(error="Invalid status"),400
-    db().execute("UPDATE bookings SET status=? WHERE id=?",(status,booking_id)); db().commit()
-    return jsonify(ok=True)
-
-@app.get("/health")
-def health(): return jsonify(ok=True)
-
-init_db()
-if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=int(os.getenv("PORT","5000")), debug=False)
+ u=me();return jsonify(notifications=[dict(r) for r in conn().execute('SELECT * FROM notifications WHERE user_id IS NULL OR user_id=? ORDER BY id DESC',(u['id'],))])
+@app.get('/api/admin/summary')
+@admin
+def summary():
+ c=conn();return jsonify(users=[user_json(x) for x in c.execute('SELECT * FROM users ORDER BY id DESC')],bookings=[dict(x) for x in c.execute('SELECT * FROM bookings ORDER BY id DESC')],events=[dict(x) for x in c.execute('SELECT e.*,u.email FROM events e LEFT JOIN users u ON u.id=e.user_id ORDER BY e.id DESC LIMIT 300')],features=[dict(x) for x in c.execute('SELECT * FROM features ORDER BY id')],settings={x['key']:x['value'] for x in c.execute('SELECT * FROM settings')})
+@app.post('/api/admin/users/<int:i>')
+@admin
+def edituser(i):
+ d=request.get_json() or {}; target=conn().execute('SELECT * FROM users WHERE id=?',(i,)).fetchone()
+ if not target:return jsonify(error='User not found.'),404
+ if target['role']=='admin' and i!=me()['id']:return jsonify(error='Cannot edit another admin.'),400
+ conn().execute('UPDATE users SET name=?,blocked=? WHERE id=?',(str(d.get('name',target['name'])).strip()[:80],int(bool(d.get('blocked',target['blocked']))),i));conn().commit();return jsonify(ok=True)
+@app.post('/api/admin/bookings/<int:i>')
+@admin
+def editbooking(i):
+ d=request.get_json() or {};status=d.get('status','Pending');review=str(d.get('review',''))[:500]
+ if status not in ['Pending','Accepted','Rejected','In Review','Completed']:return jsonify(error='Invalid status.'),400
+ conn().execute('UPDATE bookings SET status=?,review=? WHERE id=?',(status,review,i));b=conn().execute('SELECT user_id,service FROM bookings WHERE id=?',(i,)).fetchone()
+ if b and b['user_id']:conn().execute('INSERT INTO notifications(user_id,title,message,created) VALUES(?,?,?,?)',(b['user_id'],'Booking update',f"{b['service']}: {status}. {review}",now()))
+ conn().commit();return jsonify(ok=True)
+@app.post('/api/admin/features')
+@admin
+def editfeature():
+ d=request.get_json() or {}; name=str(d.get('name','')).strip()[:100]; desc=str(d.get('description','')).strip()[:250]; icon=str(d.get('icon','✦'))[:8];page=str(d.get('page','dashboard'))[:40]; enabled=int(bool(d.get('enabled',True)));i=d.get('id')
+ if not name:return jsonify(error='Feature name required.'),400
+ if i:conn().execute('UPDATE features SET name=?,description=?,icon=?,page=?,enabled=? WHERE id=?',(name,desc,icon,page,enabled,i))
+ else:conn().execute('INSERT INTO features(name,description,icon,page,enabled) VALUES(?,?,?,?,?)',(name,desc,icon,page,enabled))
+ conn().commit();return jsonify(ok=True)
+@app.post('/api/admin/settings')
+@admin
+def editsettings():
+ d=request.get_json() or {}
+ for k,v in d.items():
+  if k in ['site_name','banner_title','about','privacy','guidelines']:conn().execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(k,str(v)[:3000]))
+ conn().commit();return jsonify(ok=True)
+@app.post('/api/admin/notifications')
+@admin
+def sendnotice():
+ d=request.get_json() or {};title=str(d.get('title','')).strip();msg=str(d.get('message','')).strip()
+ if not title or not msg:return jsonify(error='Title and message required.'),400
+ conn().execute('INSERT INTO notifications(title,message,created) VALUES(?,?,?)',(title,msg,now()));conn().commit();return jsonify(ok=True)
+@app.post('/api/events')
+def events():
+ d=request.get_json() or {};u=me();conn().execute('INSERT INTO events(user_id,event,details,created) VALUES(?,?,?,?)',(u['id'] if u else None,str(d.get('event',''))[:80],str(d.get('details',''))[:300],now()));conn().commit();return jsonify(ok=True)
+init()
+if __name__=='__main__':app.run(host='127.0.0.1',port=int(os.getenv('PORT','5000')))

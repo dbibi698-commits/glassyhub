@@ -1,42 +1,35 @@
-# GlassHub — All-in-one website starter
+# GlassHub — All-in-one Web App Starter
 
-GlassHub is a responsive liquid-glass style web app with a Python/Flask backend, HTML/CSS/JavaScript frontend, user accounts, admin-only dashboard, bookings, tool pages and shortcut directories.
-
-## Included
-- Dashboard with animated glass UI and right-side/mobile navigation
-- Register/login/logout with salted PBKDF2 password hashing
-- Admin dashboard restricted to `dbibi698@gmail.com` by default
-- User list, account block/unblock, booking status management and recent app events
-- Cyber cafe booking request form for printing/document assistance
-- Comprehensive named feature grid (PDF tools, JPG/PNG to PDF, multi-image PDF, image resize, background remover integration, cyber cafe cards/printing/recharge, website builder requests, social/AI/search, settings and history)
-- PDF rewrite/optimization attempt, multi-image to PDF, image resizer with optional GlassHub watermark, QR code generator
-- Admin-published notifications for all users or a selected account, with mark-as-read
-- AI/social shortcut directories and custom shortcuts
-- Public website preview (some websites block iframe embedding)
-- Local preferences and local tool history
-
-## Run on computer or Termux
+## Run locally
 1. Install Python 3.10+.
-2. Extract the ZIP and open a terminal in this folder.
-3. Install dependencies:
-   `python -m pip install -r requirements.txt`
-4. Set a strong secret key before running. In Termux:
-   `export FLASK_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"`
-   `export ADMIN_EMAIL="dbibi698@gmail.com"`
-5. Start:
-   `python app.py`
-6. Open `http://127.0.0.1:5000` in the device browser.
+2. Open a terminal in this folder.
+3. Install: `python -m pip install -r requirements.txt`
+4. Set a strong session secret and admin email. Windows PowerShell: `$env:FLASK_SECRET_KEY="your-long-random-secret"; $env:ADMIN_EMAIL="dbibi698@gmail.com"`. Termux/Linux: `export FLASK_SECRET_KEY="your-long-random-secret"; export ADMIN_EMAIL="dbibi698@gmail.com"`.
+5. Start: `python app.py`
+6. Open `http://127.0.0.1:5000`.
 
-For Termux, use `pkg update && pkg install python` before step 3 if needed. Keep the terminal running while using the local website.
+## Admin
+Register using `dbibi698@gmail.com` to receive the admin role. Other email addresses become regular users. This is not email ownership verification; add an email provider and verification flow before public deployment. Use a strong password and secret key.
 
-## Admin access
-Register an account using **exactly** `dbibi698@gmail.com`; that account is assigned the admin role. Choose a strong password and keep it private. Other emails become normal users. This starter does not send email verification or password-reset emails yet; those require configuring a mail provider. For a public deployment, use HTTPS, a production WSGI server, CSRF protection, rate limiting, verified email ownership and backups.
+## Included features
+- Dashboard web search engine selector (Google, Brave, Bing, DuckDuckGo, YouTube)
+- Login/register/logout, profile picture, display name, password change
+- Separate admin dashboard tabs for users, bookings, feature toggles/add/edit, website settings, notifications, activity
+- Admin can edit user display name, block/unblock accounts, accept/reject/review/complete bookings and attach a review message
+- Admin-managed feature tiles and website About/Privacy/Guidelines settings
+- PDF upload and rasterized PDF compression/download (text is converted to images; quality/size trade-off)
+- Image upload preview, resize, quality control, optional GlassHub watermark
+- Multiple JPG/PNG images to PDF
+- AI and social shortcuts, add-your-own shortcuts
+- Phone and PC wallpaper generator with download
+- Local history/preferences export and admin JSON backup
+- Cyber cafe booking categories for cards, printing, scan, recharge, website help and photo editing
 
-## Important limitations
-- This is a starter project, not a production-ready government-service portal. Several services are booking/request pages rather than direct integrations.
-- The background remover is a clearly marked integration placeholder. Put provider API keys on the server as environment variables; never paste secret API keys into frontend code.
-- PDF optimizer rewrites the PDF but cannot promise a specific target size. Actual compression may need a server-side tool such as Ghostscript.
-- Social/AI links open official service pages in a new tab. Website preview may fail for sites that block iframe embedding.
-- App activity logs are limited to events inside this app. It does not secretly track GPS, other websites or a user's whole device. Tell users what is logged and follow applicable privacy law.
-- Government document services are booking requests/guidance only. Use official portals and never collect OTPs, passwords or unnecessary sensitive ID numbers.
-- No APK code or APK build configuration is included, as requested. This web project can later be wrapped with a suitable Android WebView/PWA workflow.
+## Important limits
+- The background remover requires a provider-specific server-side integration. Never put API keys in public JavaScript.
+- PDF compression rasterizes pages and cannot unlock password-protected PDFs. It cannot guarantee a precise KB target.
+- Website shortcuts open external sites in new tabs; this app does not install or control native apps on the device.
+- Bookings for government-document help are requests only, not direct government application APIs. Never collect OTPs or passwords.
+- For production: use HTTPS, a production WSGI server, CSRF protection, login rate limits, verified email ownership, secure secrets, backups, privacy notice and consent for activity logs.
+- Firebase is not connected in this starter. To connect Firebase free tier, create a Firebase project, enable Authentication > Email/Password, create Firestore, then add the Firebase Web SDK config and security rules. Never make Firestore public; backend authorization still must protect admin operations.
+- No APK build files included.
